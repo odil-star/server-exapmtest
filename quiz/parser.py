@@ -110,7 +110,7 @@ def parse_questions(text: str) -> list[ParsedQuestion]:
 
         question_number = len(questions) + 1
         parts = [
-            _clean_hash(part.strip())
+            part.strip()
             for part in re.split(r"\n?={5,}\n?", block)
             if part.strip()
         ]
@@ -122,8 +122,9 @@ def parse_questions(text: str) -> list[ParsedQuestion]:
                 questions_found=len(questions),
             )
 
-        question_text = parts[0]
-        answer_texts = [answer for answer in parts[1:] if answer]
+        question_text = parts[0].strip()
+        answer_parts = [_parse_answer_part(answer) for answer in parts[1:] if answer]
+        answer_texts = [answer["text"] for answer in answer_parts if answer["text"]]
 
         if len(answer_texts) < 2:
             raise ParseQuestionsError(
@@ -133,9 +134,38 @@ def parse_questions(text: str) -> list[ParsedQuestion]:
                 questions_found=len(questions),
             )
 
+        marked_answers = [
+            answer
+            for answer in answer_parts
+            if answer["is_marked_correct"] and answer["text"]
+        ]
+
+        if len(marked_answers) > 1:
+            raise ParseQuestionsError(
+                f"Вопрос {question_number}: отмечено несколько правильных ответов.",
+                question_number=question_number,
+                question_text=question_text,
+                answers=[
+                    ParsedAnswer(
+                        text=answer["text"],
+                        is_correct=answer["is_marked_correct"],
+                    )
+                    for answer in answer_parts
+                    if answer["text"]
+                ],
+                questions_found=len(questions),
+            )
+
+        has_marked_answer = bool(marked_answers)
         answers = [
-            ParsedAnswer(text=answer_text, is_correct=index == 0)
-            for index, answer_text in enumerate(answer_texts)
+            ParsedAnswer(
+                text=answer["text"],
+                is_correct=answer["is_marked_correct"]
+                if has_marked_answer
+                else index == 0,
+            )
+            for index, answer in enumerate(answer_parts)
+            if answer["text"]
         ]
 
         questions.append(ParsedQuestion(text=question_text, answers=answers))
@@ -146,8 +176,17 @@ def parse_questions(text: str) -> list[ParsedQuestion]:
     return questions
 
 
-def _clean_hash(text: str) -> str:
-    return text.replace("#", "").strip()
+def _parse_answer_part(text: str) -> dict[str, str | bool]:
+    stripped_text = text.strip()
+    is_marked_correct = stripped_text.startswith("#")
+
+    if is_marked_correct:
+        stripped_text = stripped_text[1:].strip()
+
+    return {
+        "text": stripped_text,
+        "is_marked_correct": is_marked_correct,
+    }
 
 
 def parse_test_text(raw_text: str) -> list[ParsedQuestion]:

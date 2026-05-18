@@ -15,6 +15,27 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
+## Environment
+
+Production-настройки берутся из переменных окружения:
+
+```powershell
+$env:SECRET_KEY="change-me"
+$env:DEBUG="False"
+$env:ALLOWED_HOSTS="server-exapmtest.onrender.com,127.0.0.1,localhost"
+$env:CORS_ALLOWED_ORIGINS="https://odil-star.github.io,https://server-exapmtest.onrender.com"
+$env:CSRF_TRUSTED_ORIGINS="https://odil-star.github.io,https://server-exapmtest.onrender.com"
+```
+
+API использует `TokenAuthentication`. Frontend получает token через `/api/login/`,
+сохраняет его в `localStorage` и отправляет во все API-запросы:
+
+```http
+Authorization: Token <token>
+```
+
+Django Admin продолжает работать через обычную session-auth.
+
 После запуска:
 
 - сайт: http://127.0.0.1:8000/
@@ -57,6 +78,10 @@ python manage.py runserver
 - строка с `#` — правильный ответ
 - у каждого вопроса должен быть один правильный ответ
 - у каждого вопроса должно быть минимум 2 варианта ответа
+
+Если в вариантах ответа есть `#`, правильным считается только помеченный вариант.
+Если `#` нет, правильным считается первый вариант ответа. Если `#` указано у
+нескольких вариантов одного вопроса, загрузка покажет ошибку.
 
 ## Исправление `OperationalError: attempt to write a readonly database`
 

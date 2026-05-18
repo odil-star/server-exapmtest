@@ -50,8 +50,9 @@ def api_login(request):
     token, _created = Token.objects.get_or_create(user=user)
     return JsonResponse(
         {
-            **_user_payload(user),
             "token": token.key,
+            "username": user.username,
+            "is_staff": user.is_staff,
         }
     )
 
