@@ -119,6 +119,161 @@ def api_block_detail(request, block_id):
     return Response(BlockDetailSerializer(block).data)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def api_random_block(request, test_id):
+    test = get_object_or_404(Test, id=test_id, is_active=True)
+
+    try:
+        count = int(request.GET.get("count", 50))
+    except ValueError:
+        count = 50
+    count = max(1, min(count, 50))
+
+    questions = list(
+        Question.objects
+        .filter(block__test=test)
+        .prefetch_related("answers")
+        .order_by("?")[:count]
+    )
+
+    return Response(
+        {
+            "id": f"random-{test.id}",
+            "title": "Случайный тест",
+            "test_id": test.id,
+            "question_count": len(questions),
+            "questions": [
+                {
+                    "id": question.id,
+                    "text": question.text,
+                    "answers": [
+                        {
+                            "id": answer.id,
+                            "text": answer.text,
+                        }
+                        for answer in question.answers.all()
+                    ],
+                }
+                for question in questions
+            ],
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def api_random_check_answer(request):
+    question_id = request.data.get("question_id")
+    answer_id = request.data.get("answer_id")
+
+    if question_id is None or answer_id is None:
+        return Response(
+            {"detail": "Нужно передать question_id и answer_id."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    question = get_object_or_404(
+        Question.objects.filter(block__test__is_active=True).prefetch_related("answers"),
+        id=question_id,
+    )
+    selected_answer = get_object_or_404(Answer, id=answer_id, question=question)
+    correct_answer = question.answers.filter(is_correct=True).first()
+
+    return Response(
+        {
+            "is_correct": selected_answer.is_correct,
+            "selected_answer_id": selected_answer.id,
+            "correct_answer_id": correct_answer.id if correct_answer else None,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def api_random_submit(request):
+    submitted_answers = request.data.get("answers", [])
+
+    if not isinstance(submitted_answers, list):
+        return Response(
+            {"detail": "Поле answers должно быть списком."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    question_ids = []
+    selected_by_question = {}
+    for item in submitted_answers:
+        question_id = item.get("question_id")
+        answer_id = item.get("answer_id")
+        if question_id is None or answer_id is None:
+            return Response(
+                {"detail": "Каждый ответ должен содержать question_id и answer_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            question_id = int(question_id)
+            answer_id = int(answer_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "question_id и answer_id должны быть числами."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        question_ids.append(question_id)
+        selected_by_question[question_id] = answer_id
+
+    questions = list(
+        Question.objects.filter(
+            id__in=question_ids,
+            block__test__is_active=True,
+        ).prefetch_related("answers")
+    )
+    questions_by_id = {question.id: question for question in questions}
+
+    if set(questions_by_id) != set(question_ids):
+        return Response(
+            {"detail": "Один или несколько вопросов не найдены."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    score = 0
+    answer_details = []
+    for question_id in question_ids:
+        question = questions_by_id[question_id]
+        selected_answer = get_object_or_404(
+            Answer,
+            id=selected_by_question[question_id],
+            question=question,
+        )
+        correct_answer = question.answers.filter(is_correct=True).first()
+        is_correct = selected_answer.is_correct
+        if is_correct:
+            score += 1
+
+        answer_details.append(
+            {
+                "question": question.text,
+                "selected_answer": selected_answer.text,
+                "correct_answer": correct_answer.text if correct_answer else "",
+                "is_correct": is_correct,
+            }
+        )
+
+    total = len(question_ids)
+    percent = round((score / total) * 100) if total else 0
+
+    return Response(
+        {
+            "score": score,
+            "total": total,
+            "percent": percent,
+            "block_title": "Случайный тест",
+            "answers": answer_details,
+        }
+    )
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def api_check_answer(request, block_id):
