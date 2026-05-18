@@ -1,14 +1,14 @@
 import json
 
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate
 from django.db import transaction
 from django.db.models import Count
 from django.http import JsonResponse
-from django.middleware.csrf import get_token
 from django.shortcuts import get_object_or_404
-from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework import status
+from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -47,37 +47,26 @@ def api_login(request):
     if user is None:
         return JsonResponse({"detail": "Неверный логин или пароль."}, status=400)
 
-    login(request, user)
-    return JsonResponse(_user_payload(user, request))
+    token, _created = Token.objects.get_or_create(user=user)
+    return JsonResponse(
+        {
+            **_user_payload(user),
+            "token": token.key,
+        }
+    )
 
 
-@csrf_exempt
-@require_http_methods(["POST", "OPTIONS"])
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def api_logout(request):
-    if request.method == "OPTIONS":
-        return JsonResponse({})
-
-    logout(request)
-    return JsonResponse({"detail": "Вы вышли из системы."})
+    Token.objects.filter(user=request.user).delete()
+    return Response({"detail": "Вы вышли из системы."})
 
 
-@ensure_csrf_cookie
-@require_http_methods(["GET", "OPTIONS"])
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def api_me(request):
-    if request.method == "OPTIONS":
-        return JsonResponse({})
-
-    if not request.user.is_authenticated:
-        return JsonResponse(
-            {
-                "is_authenticated": False,
-                "username": "",
-                "is_staff": False,
-                "csrf_token": get_token(request),
-            }
-        )
-
-    return JsonResponse(_user_payload(request.user, request))
+    return Response(_user_payload(request.user))
 
 
 @api_view(["GET"])
@@ -287,12 +276,9 @@ def api_admin_upload_test(request):
     return Response(TestDetailSerializer(test).data, status=status.HTTP_201_CREATED)
 
 
-def _user_payload(user, request=None):
-    payload = {
+def _user_payload(user):
+    return {
         "is_authenticated": True,
         "username": user.username,
         "is_staff": user.is_staff,
     }
-    if request is not None:
-        payload["csrf_token"] = get_token(request)
-    return payload
