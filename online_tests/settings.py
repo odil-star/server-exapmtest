@@ -9,7 +9,10 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
 
 DEBUG = os.environ.get("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
+ALLOWED_HOSTS = os.environ.get(
+    "ALLOWED_HOSTS",
+    "server-exapmtest.onrender.com,127.0.0.1,localhost",
+).split(",")
 
 INSTALLED_APPS = [
     "corsheaders",
@@ -100,23 +103,12 @@ CORS_ALLOWED_ORIGINS = [
     origin
     for origin in os.environ.get(
         "CORS_ALLOWED_ORIGINS",
-        ",".join(
-            [
-                "https://odil-star.github.io",
-                "https://server-exapmtest.onrender.com",
-                "http://127.0.0.1:5500",
-                "http://localhost:5500",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-            ]
-        ),
+        "https://odil-star.github.io,http://127.0.0.1:5500,http://localhost:5500",
     ).split(",")
     if origin
 ]
 
-CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_CREDENTIALS = False
 
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
@@ -128,18 +120,7 @@ CSRF_TRUSTED_ORIGINS = [
     origin
     for origin in os.environ.get(
         "CSRF_TRUSTED_ORIGINS",
-        ",".join(
-            [
-                "https://odil-star.github.io",
-                "https://server-exapmtest.onrender.com",
-                "http://127.0.0.1:5500",
-                "http://localhost:5500",
-                "http://localhost:3000",
-                "http://127.0.0.1:3000",
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-            ]
-        ),
+        "https://odil-star.github.io,https://server-exapmtest.onrender.com",
     ).split(",")
     if origin
 ]

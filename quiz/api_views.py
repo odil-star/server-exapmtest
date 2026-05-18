@@ -40,8 +40,6 @@ def api_exception_handler(exc, context):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):
-    print(request.data)
-
     username = request.data.get("username")
     password = request.data.get("password")
 
