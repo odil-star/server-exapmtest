@@ -40,16 +40,18 @@ def api_exception_handler(exc, context):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):
+    print(request.data)
+
     username = request.data.get("username")
     password = request.data.get("password")
 
     if not username or not password:
         return Response(
-            {"detail": "Введите username и password."},
+            {"detail": "Введите логин и пароль."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    user = authenticate(request, username=username, password=password)
+    user = authenticate(username=username, password=password)
     if user is None:
         return Response(
             {"detail": "Неверный логин или пароль."},
@@ -61,6 +63,7 @@ def api_login(request):
         {
             "token": token.key,
             "username": user.username,
+            "is_staff": user.is_staff,
         }
     )
 
