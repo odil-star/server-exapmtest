@@ -15,6 +15,7 @@ urlpatterns = [
     path("login/", api_views.api_login, name="api_login"),
     path("logout/", api_views.api_logout, name="api_logout"),
     path("me/", api_views.api_me, name="api_me"),
+    path("profile/", api_views.api_profile, name="api_profile"),
     path("leaderboard/", api_views.api_leaderboard, name="api_leaderboard"),
     path("tests/", api_views.api_tests, name="api_tests"),
     path("tests/<int:test_id>/random-block/", api_views.api_random_block, name="api_random_block"),

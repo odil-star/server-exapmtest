@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 from .forms import TestUploadForm
-from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer
+from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer, UserProfile
 from .parser import ParseQuestionsError, parse_test_file
 from .serializers import (
     BlockDetailSerializer,
@@ -56,11 +56,14 @@ def api_login(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    profile, _profile_created = UserProfile.objects.get_or_create(user=user)
     token, _created = Token.objects.get_or_create(user=user)
     return Response(
         {
             "token": token.key,
             "username": user.username,
+            "nickname": profile.nickname,
+            "avatar_color": profile.avatar_color,
             "is_staff": user.is_staff,
         }
     )
@@ -77,6 +80,36 @@ def api_logout(request):
 @permission_classes([IsAuthenticated])
 def api_me(request):
     return Response(_user_payload(request.user))
+
+
+@api_view(["GET", "PATCH"])
+@permission_classes([IsAuthenticated])
+def api_profile(request):
+    profile, _created = UserProfile.objects.get_or_create(user=request.user)
+
+    if request.method == "PATCH":
+        if "nickname" in request.data:
+            nickname = str(request.data.get("nickname", "")).strip()
+            if not nickname:
+                return Response(
+                    {"detail": "Никнейм не может быть пустым."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(nickname) < 2:
+                return Response(
+                    {"detail": "Никнейм должен содержать минимум 2 символа."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(nickname) > 50:
+                return Response(
+                    {"detail": "Никнейм должен быть не длиннее 50 символов."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            profile.nickname = nickname
+            profile.save(update_fields=["nickname", "updated_at"])
+
+    return Response(_profile_payload(request.user, profile))
 
 
 @api_view(["GET"])
@@ -525,11 +558,73 @@ def api_admin_upload_test(request):
 
 
 def _user_payload(user):
+    profile = getattr(user, "profile", None)
     return {
         "is_authenticated": True,
         "username": user.username,
         "is_staff": user.is_staff,
+        "nickname": getattr(profile, "nickname", ""),
+        "avatar_color": getattr(profile, "avatar_color", "#2563eb"),
     }
+
+
+def _profile_payload(user, profile):
+    results = list(
+        TestResult.objects.filter(user=user)
+        .select_related("test", "block")
+        .order_by("-created_at")
+    )
+    percents = [_result_percent(result) for result in results]
+    best_percent = max(percents) if percents else 0
+    average_percent = round(sum(percents) / len(percents)) if percents else 0
+
+    return {
+        "username": user.username,
+        "nickname": profile.nickname,
+        "email": user.email or "",
+        "date_joined": _format_completed_at(user.date_joined),
+        "tests_completed": len(results),
+        "best_percent": best_percent,
+        "average_percent": average_percent,
+        "leaderboard_rank": _leaderboard_rank_for_user(user.id),
+        "avatar_color": profile.avatar_color,
+    }
+
+
+def _result_percent(result):
+    total = result.total_questions or 0
+    if not total:
+        return 0
+    return round((result.score / total) * 100)
+
+
+def _leaderboard_rank_for_user(user_id):
+    results = (
+        TestResult.objects.select_related("user", "test", "block")
+        .prefetch_related("user_answers__question__block")
+        .order_by("-created_at")
+    )
+    best_by_user = {}
+
+    for result in results:
+        item = {
+            "result": result,
+            "username": result.user.username,
+            "percent": _result_percent(result),
+            "score": result.score,
+            "total": result.total_questions or 0,
+            "test_title": result.test.title,
+            "completed_at": result.created_at,
+        }
+        current = best_by_user.get(result.user_id)
+        if current is None or _leaderboard_sort_key(item) < _leaderboard_sort_key(current):
+            best_by_user[result.user_id] = item
+
+    for index, item in enumerate(sorted(best_by_user.values(), key=_leaderboard_sort_key), start=1):
+        if item["result"].user_id == user_id:
+            return index
+
+    return None
 
 
 def _leaderboard_sort_key(item):

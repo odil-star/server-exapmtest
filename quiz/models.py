@@ -73,6 +73,26 @@ class Answer(models.Model):
         return self.text
 
 
+class UserProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="profile",
+        verbose_name="Пользователь",
+    )
+    nickname = models.CharField("Никнейм", max_length=50, blank=True)
+    avatar_color = models.CharField("Цвет аватара", max_length=20, default="#2563eb")
+    created_at = models.DateTimeField("Дата создания", auto_now_add=True)
+    updated_at = models.DateTimeField("Дата обновления", auto_now=True)
+
+    class Meta:
+        verbose_name = "Профиль пользователя"
+        verbose_name_plural = "Профили пользователей"
+
+    def __str__(self):
+        return self.nickname or self.user.username
+
+
 class TestResult(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
