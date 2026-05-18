@@ -92,6 +92,59 @@ def api_tests(request):
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
+def api_leaderboard(request):
+    results = (
+        TestResult.objects.select_related("user", "test", "block")
+        .prefetch_related("user_answers__question__block")
+        .order_by("-created_at")
+    )
+
+    best_by_user = {}
+    for result in results:
+        total = result.total_questions or 0
+        percent = round((result.score / total) * 100) if total else 0
+        blocks = {
+            user_answer.question.block_id
+            for user_answer in result.user_answers.all()
+        }
+        is_random = len(blocks) > 1
+        item = {
+            "result": result,
+            "username": result.user.username,
+            "percent": percent,
+            "score": result.score,
+            "total": total,
+            "test_title": "Случайный тест" if is_random else result.test.title,
+            "completed_at": result.created_at,
+        }
+
+        current = best_by_user.get(result.user_id)
+        if current is None or _leaderboard_sort_key(item) < _leaderboard_sort_key(current):
+            best_by_user[result.user_id] = item
+
+    leaders = sorted(best_by_user.values(), key=_leaderboard_sort_key)[:5]
+
+    return Response(
+        {
+            "results": [
+                {
+                    "rank": index,
+                    "username": item["username"],
+                    "percent": item["percent"],
+                    "score": item["score"],
+                    "total": item["total"],
+                    "test_title": item["test_title"],
+                    "block_title": item["result"].block.title if item["result"].block else "",
+                    "completed_at": _format_completed_at(item["completed_at"]),
+                }
+                for index, item in enumerate(leaders, start=1)
+            ]
+        }
+    )
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def api_test_detail(request, test_id):
     test = get_object_or_404(
         Test.objects.filter(is_active=True).prefetch_related("blocks__questions"),
@@ -239,6 +292,7 @@ def api_random_submit(request):
 
     score = 0
     answer_details = []
+    selected_answers = {}
     for question_id in question_ids:
         question = questions_by_id[question_id]
         selected_answer = get_object_or_404(
@@ -246,6 +300,7 @@ def api_random_submit(request):
             id=selected_by_question[question_id],
             question=question,
         )
+        selected_answers[question_id] = selected_answer
         correct_answer = question.answers.filter(is_correct=True).first()
         is_correct = selected_answer.is_correct
         if is_correct:
@@ -263,8 +318,32 @@ def api_random_submit(request):
     total = len(question_ids)
     percent = round((score / total) * 100) if total else 0
 
+    result = None
+    if questions:
+        first_question = questions[0]
+        with transaction.atomic():
+            result = TestResult.objects.create(
+                user=request.user,
+                test=first_question.block.test,
+                block=first_question.block,
+                score=score,
+                total_questions=total,
+            )
+            UserAnswer.objects.bulk_create(
+                [
+                    UserAnswer(
+                        result=result,
+                        question=question,
+                        selected_answer=selected_answers[question.id],
+                        is_correct=selected_answers[question.id].is_correct,
+                    )
+                    for question in questions
+                ]
+            )
+
     return Response(
         {
+            "result_id": result.id if result else None,
             "score": score,
             "total": total,
             "percent": percent,
@@ -451,3 +530,11 @@ def _user_payload(user):
         "username": user.username,
         "is_staff": user.is_staff,
     }
+
+
+def _leaderboard_sort_key(item):
+    return (-item["percent"], -item["score"], item["completed_at"])
+
+
+def _format_completed_at(value):
+    return value.isoformat().replace("+00:00", "Z")
