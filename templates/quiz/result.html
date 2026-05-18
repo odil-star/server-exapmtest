@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Результат{% endblock %}
+
+{% block content %}
+<section class="card shadow-sm mb-4">
+    <div class="card-body">
+        <h1 class="h3">Результат блока</h1>
+        <p class="result-score mb-1">{{ result.score }} из {{ result.total_questions }}</p>
+        <p class="text-secondary">{{ test.title }} · {{ block.title }}</p>
+        <a class="btn btn-primary" href="{% url 'test_blocks' test.pk %}">Вернуться к блокам</a>
+    </div>
+</section>
+
+<section class="d-grid gap-3">
+    <h2 class="h4">Ваши ответы</h2>
+    {% for user_answer in result.user_answers.all %}
+        <article class="card shadow-sm review-item {% if user_answer.is_correct %}correct{% else %}wrong{% endif %}">
+            <div class="card-body">
+                <h3 class="h5">{{ user_answer.question.text }}</h3>
+                <p class="mb-2">Выбранный ответ: {{ user_answer.selected_answer.text }}</p>
+                <span class="badge {% if user_answer.is_correct %}text-bg-success{% else %}text-bg-danger{% endif %}">
+                    {% if user_answer.is_correct %}Верно{% else %}Неверно{% endif %}
+                </span>
+            </div>
+        </article>
+    {% endfor %}
+</section>
+{% endblock %}

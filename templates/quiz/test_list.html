@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Список тестов{% endblock %}
+
+{% block content %}
+<section class="mb-4">
+    <h1 class="display-6 fw-bold mb-2">Доступные тесты</h1>
+    <p class="text-secondary mb-0">Выберите тест, затем откройте нужный блок вопросов.</p>
+</section>
+
+<section class="row g-3">
+    {% for test in tests %}
+        <div class="col-12 col-md-6 col-lg-4">
+            <article class="card h-100 shadow-sm">
+                <div class="card-body d-flex flex-column">
+                    <h2 class="h5 card-title">{{ test.title }}</h2>
+                    <p class="card-text text-secondary">{{ test.description|default:"Описание не указано." }}</p>
+                    <div class="text-secondary small mt-auto mb-3">
+                        Блоков: {{ test.blocks.count }}
+                    </div>
+                    <a class="btn btn-primary" href="{% url 'test_blocks' test.pk %}">Открыть блоки</a>
+                </div>
+            </article>
+        </div>
+    {% empty %}
+        <div class="col-12">
+            <div class="alert alert-info">Пока нет доступных тестов.</div>
+        </div>
+    {% endfor %}
+</section>
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}{{ test.title }} - {{ block.title }}{% endblock %}
+
+{% block content %}
+<section class="mb-4">
+    <a href="{% url 'test_blocks' test.pk %}" class="btn btn-outline-secondary btn-sm mb-3">Назад к блокам</a>
+    <h1 class="display-6 fw-bold mb-2">{{ test.title }}</h1>
+    <p class="text-secondary mb-0">{{ block.title }} · вопросов: {{ questions|length }}</p>
+</section>
+
+<form method="post" class="d-grid gap-3">
+    {% csrf_token %}
+    {% for question in questions %}
+        <fieldset class="card shadow-sm">
+            <div class="card-body">
+                <legend class="h5 mb-3">{{ forloop.counter }}. {{ question.text }}</legend>
+                {% for answer in question.answers.all %}
+                    <div class="form-check answer-option">
+                        <input class="form-check-input" type="radio" name="question_{{ question.id }}" value="{{ answer.id }}" id="answer_{{ answer.id }}">
+                        <label class="form-check-label" for="answer_{{ answer.id }}">{{ answer.text }}</label>
+                    </div>
+                {% endfor %}
+            </div>
+        </fieldset>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary btn-lg">Завершить блок</button>
+</form>
+{% endblock %}
