@@ -3,27 +3,31 @@
 {% block title %}Результат{% endblock %}
 
 {% block content %}
-<section class="card shadow-sm mb-4">
-    <div class="card-body">
-        <h1 class="h3">Результат блока</h1>
-        <p class="result-score mb-1">{{ result.score }} из {{ result.total_questions }}</p>
-        <p class="text-secondary">{{ test.title }} · {{ block.title }}</p>
-        <a class="btn btn-primary" href="{% url 'test_blocks' test.pk %}">Вернуться к блокам</a>
+<section class="result-layout">
+    <div class="card result-card">
+        <span class="eyebrow">Готово</span>
+        <h1>Результат блока</h1>
+        <div class="score-circle">
+            <strong>{{ result.score }}</strong>
+            <span>из {{ result.total_questions }}</span>
+        </div>
+        <p class="muted">{{ test.title }} · {{ block.title }}</p>
+        <a class="button button-primary button-wide" href="{% url 'test_blocks' test.pk %}">Вернуться к блокам</a>
     </div>
-</section>
 
-<section class="d-grid gap-3">
-    <h2 class="h4">Ваши ответы</h2>
-    {% for user_answer in result.user_answers.all %}
-        <article class="card shadow-sm review-item {% if user_answer.is_correct %}correct{% else %}wrong{% endif %}">
-            <div class="card-body">
-                <h3 class="h5">{{ user_answer.question.text }}</h3>
-                <p class="mb-2">Выбранный ответ: {{ user_answer.selected_answer.text }}</p>
-                <span class="badge {% if user_answer.is_correct %}text-bg-success{% else %}text-bg-danger{% endif %}">
-                    {% if user_answer.is_correct %}Верно{% else %}Неверно{% endif %}
-                </span>
-            </div>
-        </article>
-    {% endfor %}
+    <section class="answers-review">
+        <div class="section-title">
+            <span class="eyebrow">Разбор</span>
+            <h2>Ваши ответы</h2>
+        </div>
+
+        {% for user_answer in result.user_answers.all %}
+            <article class="card review-card {% if user_answer.is_correct %}correct{% else %}wrong{% endif %}">
+                <h3>{{ forloop.counter }}. {{ user_answer.question.text }}</h3>
+                <p><span>Выбранный ответ:</span> {{ user_answer.selected_answer.text }}</p>
+                <strong>{% if user_answer.is_correct %}Верно{% else %}Неверно{% endif %}</strong>
+            </article>
+        {% endfor %}
+    </section>
 </section>
 {% endblock %}

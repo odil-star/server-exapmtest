@@ -3,28 +3,39 @@
 {% block title %}{{ test.title }}{% endblock %}
 
 {% block content %}
-<section class="mb-4">
-    <a href="{% url 'test_list' %}" class="btn btn-outline-secondary btn-sm mb-3">Назад к тестам</a>
-    <h1 class="display-6 fw-bold mb-2">{{ test.title }}</h1>
-    {% if test.description %}
-        <p class="text-secondary mb-0">{{ test.description }}</p>
-    {% endif %}
+<section class="page-hero">
+    <div>
+        <a href="{% url 'test_list' %}" class="back-link">← Назад к тестам</a>
+        <span class="eyebrow">Блоки теста</span>
+        <h1>{{ test.title }}</h1>
+        {% if test.description %}
+            <p>{{ test.description }}</p>
+        {% endif %}
+    </div>
+    <div class="hero-stat">
+        <strong>{{ blocks|length }}</strong>
+        <span>блоков</span>
+    </div>
 </section>
 
-<section class="row g-3">
+<section class="grid">
     {% for block in blocks %}
-        <div class="col-12 col-md-6 col-lg-4">
-            <article class="card h-100 shadow-sm">
-                <div class="card-body d-flex flex-column">
-                    <h2 class="h5 card-title">{{ block.title }}</h2>
-                    <p class="text-secondary">Вопросов в блоке: {{ block.questions.count }}</p>
-                    <a class="btn btn-primary mt-auto" href="{% url 'take_block' test.pk block.pk %}">Пройти блок</a>
-                </div>
-            </article>
-        </div>
+        <article class="card block-card">
+            <div class="block-number">{{ block.order }}</div>
+            <div class="card-head">
+                <span class="eyebrow">Блок</span>
+                <h2>{{ block.title }}</h2>
+            </div>
+            <div class="meta-row">
+                <span>Вопросов</span>
+                <strong>{{ block.questions.count }}</strong>
+            </div>
+            <a class="button button-primary button-wide" href="{% url 'take_block' test.pk block.pk %}">Пройти блок</a>
+        </article>
     {% empty %}
-        <div class="col-12">
-            <div class="alert alert-info">В этом тесте пока нет блоков.</div>
+        <div class="empty-state">
+            <h2>В этом тесте пока нет блоков</h2>
+            <p>Загрузите вопросы или выберите другой тест.</p>
         </div>
     {% endfor %}
 </section>

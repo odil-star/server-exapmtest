@@ -3,27 +3,74 @@
 {% block title %}{{ test.title }} - {{ block.title }}{% endblock %}
 
 {% block content %}
-<section class="mb-4">
-    <a href="{% url 'test_blocks' test.pk %}" class="btn btn-outline-secondary btn-sm mb-3">Назад к блокам</a>
-    <h1 class="display-6 fw-bold mb-2">{{ test.title }}</h1>
-    <p class="text-secondary mb-0">{{ block.title }} · вопросов: {{ questions|length }}</p>
+<section class="quiz-top card">
+    <div>
+        <a href="{% url 'test_blocks' test.pk %}" class="back-link">← Назад к блокам</a>
+        <span class="eyebrow">Прохождение</span>
+        <h1>{{ block.title }}</h1>
+        <p class="muted">{{ test.title }} · вопросов: {{ questions|length }}</p>
+    </div>
+    <div class="progress-wrap" aria-label="Прогресс ответов">
+        <div class="progress-meta">
+            <span>Отвечено</span>
+            <strong><span id="answeredCount">0</span> / {{ questions|length }}</strong>
+        </div>
+        <div class="progress-track">
+            <div id="answerProgress" class="progress-fill"></div>
+        </div>
+    </div>
 </section>
 
-<form method="post" class="d-grid gap-3">
+<form method="post" id="quizForm" class="quiz-form">
     {% csrf_token %}
     {% for question in questions %}
-        <fieldset class="card shadow-sm">
-            <div class="card-body">
-                <legend class="h5 mb-3">{{ forloop.counter }}. {{ question.text }}</legend>
+        <fieldset class="card question-card">
+            <legend>
+                <span class="question-index">{{ forloop.counter }}</span>
+                <span>{{ question.text }}</span>
+            </legend>
+
+            <div class="answers-list">
                 {% for answer in question.answers.all %}
-                    <div class="form-check answer-option">
-                        <input class="form-check-input" type="radio" name="question_{{ question.id }}" value="{{ answer.id }}" id="answer_{{ answer.id }}">
-                        <label class="form-check-label" for="answer_{{ answer.id }}">{{ answer.text }}</label>
-                    </div>
+                    <label class="answer-option" for="answer_{{ answer.id }}">
+                        <input type="radio" name="question_{{ question.id }}" value="{{ answer.id }}" id="answer_{{ answer.id }}">
+                        <span>{{ answer.text }}</span>
+                    </label>
                 {% endfor %}
             </div>
         </fieldset>
     {% endfor %}
-    <button type="submit" class="btn btn-primary btn-lg">Завершить блок</button>
+
+    <div class="sticky-actions">
+        <button type="submit" class="button button-primary button-large">Завершить блок</button>
+    </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        const form = document.getElementById("quizForm");
+        const counter = document.getElementById("answeredCount");
+        const progress = document.getElementById("answerProgress");
+        const total = {{ questions|length }};
+
+        if (!form || !counter || !progress || !total) {
+            return;
+        }
+
+        function updateProgress() {
+            const names = new Set(
+                Array.from(form.querySelectorAll("input[type='radio']:checked")).map(function (input) {
+                    return input.name;
+                })
+            );
+            counter.textContent = names.size;
+            progress.style.width = Math.round((names.size / total) * 100) + "%";
+        }
+
+        form.addEventListener("change", updateProgress);
+        updateProgress();
+    })();
+</script>
 {% endblock %}

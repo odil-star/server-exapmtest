@@ -3,28 +3,36 @@
 {% block title %}Список тестов{% endblock %}
 
 {% block content %}
-<section class="mb-4">
-    <h1 class="display-6 fw-bold mb-2">Доступные тесты</h1>
-    <p class="text-secondary mb-0">Выберите тест, затем откройте нужный блок вопросов.</p>
+<section class="page-hero">
+    <div>
+        <span class="eyebrow">Каталог</span>
+        <h1>Доступные тесты</h1>
+        <p>Выберите тест, затем откройте нужный блок вопросов.</p>
+    </div>
+    <div class="hero-stat">
+        <strong>{{ tests|length }}</strong>
+        <span>тестов</span>
+    </div>
 </section>
 
-<section class="row g-3">
+<section class="grid">
     {% for test in tests %}
-        <div class="col-12 col-md-6 col-lg-4">
-            <article class="card h-100 shadow-sm">
-                <div class="card-body d-flex flex-column">
-                    <h2 class="h5 card-title">{{ test.title }}</h2>
-                    <p class="card-text text-secondary">{{ test.description|default:"Описание не указано." }}</p>
-                    <div class="text-secondary small mt-auto mb-3">
-                        Блоков: {{ test.blocks.count }}
-                    </div>
-                    <a class="btn btn-primary" href="{% url 'test_blocks' test.pk %}">Открыть блоки</a>
-                </div>
-            </article>
-        </div>
+        <article class="card test-card">
+            <div class="card-head">
+                <span class="eyebrow">Тест</span>
+                <h2>{{ test.title }}</h2>
+            </div>
+            <p class="muted">{{ test.description|default:"Описание не указано." }}</p>
+            <div class="meta-row">
+                <span>Блоков</span>
+                <strong>{{ test.blocks.count }}</strong>
+            </div>
+            <a class="button button-primary button-wide" href="{% url 'test_blocks' test.pk %}">Открыть блоки</a>
+        </article>
     {% empty %}
-        <div class="col-12">
-            <div class="alert alert-info">Пока нет доступных тестов.</div>
+        <div class="empty-state">
+            <h2>Пока нет доступных тестов</h2>
+            <p>Когда администратор загрузит тест, он появится здесь.</p>
         </div>
     {% endfor %}
 </section>
