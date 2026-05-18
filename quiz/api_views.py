@@ -56,14 +56,11 @@ def api_login(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    profile, _profile_created = UserProfile.objects.get_or_create(user=user)
     token, _created = Token.objects.get_or_create(user=user)
     return Response(
         {
             "token": token.key,
             "username": user.username,
-            "nickname": profile.nickname,
-            "avatar_color": profile.avatar_color,
             "is_staff": user.is_staff,
         }
     )
@@ -558,13 +555,10 @@ def api_admin_upload_test(request):
 
 
 def _user_payload(user):
-    profile = getattr(user, "profile", None)
     return {
         "is_authenticated": True,
         "username": user.username,
         "is_staff": user.is_staff,
-        "nickname": getattr(profile, "nickname", ""),
-        "avatar_color": getattr(profile, "avatar_color", "#2563eb"),
     }
 
 
