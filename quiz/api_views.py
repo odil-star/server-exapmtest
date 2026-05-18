@@ -1,17 +1,13 @@
-import json
-
 from django.contrib.auth import authenticate
 from django.db import transaction
 from django.db.models import Count
-from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import exception_handler
 
 from .forms import TestUploadForm
 from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer
@@ -26,33 +22,45 @@ from .serializers import (
 from .views import QUESTIONS_PER_BLOCK, _format_upload_error
 
 
-@csrf_exempt
-@require_http_methods(["POST", "OPTIONS"])
+def api_exception_handler(exc, context):
+    response = exception_handler(exc, context)
+
+    if (
+        response is not None
+        and response.status_code == status.HTTP_401_UNAUTHORIZED
+        and getattr(exc, "default_code", "") == "not_authenticated"
+    ):
+        response.data = {
+            "detail": "Authentication credentials were not provided.",
+        }
+
+    return response
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def api_login(request):
-    if request.method == "OPTIONS":
-        return JsonResponse({})
-
-    try:
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except json.JSONDecodeError:
-        return JsonResponse({"detail": "Некорректный JSON."}, status=400)
-
-    username = payload.get("username")
-    password = payload.get("password")
+    username = request.data.get("username")
+    password = request.data.get("password")
 
     if not username or not password:
-        return JsonResponse({"detail": "Введите username и password."}, status=400)
+        return Response(
+            {"detail": "Введите username и password."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     user = authenticate(request, username=username, password=password)
     if user is None:
-        return JsonResponse({"detail": "Неверный логин или пароль."}, status=400)
+        return Response(
+            {"detail": "Неверный логин или пароль."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     token, _created = Token.objects.get_or_create(user=user)
-    return JsonResponse(
+    return Response(
         {
             "token": token.key,
             "username": user.username,
-            "is_staff": user.is_staff,
         }
     )
 
@@ -159,7 +167,11 @@ def api_submit_block(request, block_id):
         answer_id = item.get("answer_id")
         if question_id is None or answer_id is None:
             return Response(
-                {"detail": "Каждый ответ должен содержать question_id и answer_id."},
+                {
+                    "detail": (
+                        "Каждый ответ должен содержать question_id и answer_id."
+                    )
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         selected_by_question[int(question_id)] = int(answer_id)
