@@ -93,6 +93,23 @@ class UserProfile(models.Model):
         return self.nickname or self.user.username
 
 
+class UserActivity(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="activity",
+        verbose_name="Пользователь",
+    )
+    last_seen = models.DateTimeField("Последняя активность")
+
+    class Meta:
+        verbose_name = "Активность пользователя"
+        verbose_name_plural = "Активность пользователей"
+
+    def __str__(self):
+        return f"{self.user} - {self.last_seen:%Y-%m-%d %H:%M:%S}"
+
+
 class TestResult(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

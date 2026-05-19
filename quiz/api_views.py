@@ -1,18 +1,31 @@
-from django.contrib.auth import authenticate
+from datetime import timedelta
+
+from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
 
 from .forms import TestUploadForm
-from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer, UserProfile
+from .models import (
+    Answer,
+    Question,
+    Test,
+    TestBlock,
+    TestResult,
+    UserActivity,
+    UserAnswer,
+    UserProfile,
+)
 from .parser import ParseQuestionsError, parse_test_file
 from .serializers import (
     BlockDetailSerializer,
@@ -59,11 +72,13 @@ def api_login(request):
         )
 
     token, _created = Token.objects.get_or_create(user=user)
+    _update_user_activity(user)
     return Response(
         {
             "token": token.key,
             "username": user.username,
             "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
         }
     )
 
@@ -78,6 +93,7 @@ def api_logout(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def api_me(request):
+    _update_user_activity(request.user)
     return Response(_user_payload(request.user))
 
 
@@ -123,11 +139,15 @@ def api_tests(request):
 
 
 @api_view(["POST"])
+@authentication_classes([TokenAuthentication])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def api_upload_test(request):
     if not request.user.is_staff and not request.user.is_superuser:
-        return Response({"detail": "Нет доступа."}, status=status.HTTP_403_FORBIDDEN)
+        return Response(
+            {"detail": "Нет доступа. Только администратор может загружать тесты."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
 
     title = str(request.data.get("title", "")).strip()
     description = str(request.data.get("description", "")).strip()
@@ -169,6 +189,27 @@ def api_upload_test(request):
             "blocks_count": blocks_count,
         },
         status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["GET"])
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
+def api_admin_stats(request):
+    if not request.user.is_superuser:
+        return Response({"detail": "Нет доступа."}, status=status.HTTP_403_FORBIDDEN)
+
+    online_since = timezone.now() - timedelta(minutes=5)
+    User = get_user_model()
+
+    return Response(
+        {
+            "users_total": User.objects.count(),
+            "users_online": UserActivity.objects.filter(last_seen__gte=online_since).count(),
+            "tests_total": Test.objects.count(),
+            "questions_total": Question.objects.count(),
+            "results_total": TestResult.objects.count(),
+        }
     )
 
 
@@ -616,11 +657,19 @@ def _create_test_from_parsed_questions(title, description, parsed_questions):
     return test, blocks_count
 
 
+def _update_user_activity(user):
+    UserActivity.objects.update_or_create(
+        user=user,
+        defaults={"last_seen": timezone.now()},
+    )
+
+
 def _user_payload(user):
     return {
         "is_authenticated": True,
         "username": user.username,
         "is_staff": user.is_staff,
+        "is_superuser": user.is_superuser,
     }
 
 
