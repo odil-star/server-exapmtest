@@ -1,10 +1,12 @@
 from django.contrib.auth import authenticate
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.authtoken.models import Token
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import exception_handler
@@ -118,6 +120,56 @@ def api_tests(request):
         .order_by("-created_at")
     )
     return Response(TestListSerializer(tests, many=True).data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def api_upload_test(request):
+    if not request.user.is_staff and not request.user.is_superuser:
+        return Response({"detail": "Нет доступа."}, status=status.HTTP_403_FORBIDDEN)
+
+    title = str(request.data.get("title", "")).strip()
+    description = str(request.data.get("description", "")).strip()
+    uploaded_file = request.FILES.get("file")
+
+    if not title:
+        return Response(
+            {"detail": "Введите название теста."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not uploaded_file:
+        return Response(
+            {"detail": "Файл не отправлен."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        parsed_questions = parse_test_file(uploaded_file)
+    except (ParseQuestionsError, ValidationError, ValueError) as exc:
+        return Response(
+            {"detail": _format_upload_error(exc)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        test, blocks_count = _create_test_from_parsed_questions(
+            title=title,
+            description=description,
+            parsed_questions=parsed_questions,
+        )
+
+    return Response(
+        {
+            "success": True,
+            "test_id": test.id,
+            "title": test.title,
+            "questions_count": len(parsed_questions),
+            "blocks_count": blocks_count,
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])
@@ -514,44 +566,54 @@ def api_admin_upload_test(request):
 
     try:
         parsed_questions = parse_test_file(form.cleaned_data["file"])
-    except (ParseQuestionsError, ValueError) as exc:
+    except (ParseQuestionsError, ValidationError, ValueError) as exc:
         return Response(
             {"file": [_format_upload_error(exc)]},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     with transaction.atomic():
-        test = Test.objects.create(
+        test, _blocks_count = _create_test_from_parsed_questions(
             title=form.cleaned_data["title"],
             description=form.cleaned_data["description"],
+            parsed_questions=parsed_questions,
         )
-        for block_index, start in enumerate(
-            range(0, len(parsed_questions), QUESTIONS_PER_BLOCK),
-            start=1,
-        ):
-            block_questions = parsed_questions[start : start + QUESTIONS_PER_BLOCK]
-            block = TestBlock.objects.create(
-                test=test,
-                title=f"Блок {block_index}",
-                order=block_index,
-            )
-            for parsed_question in block_questions:
-                question = Question.objects.create(
-                    block=block,
-                    text=parsed_question.text,
-                )
-                Answer.objects.bulk_create(
-                    [
-                        Answer(
-                            question=question,
-                            text=parsed_answer.text,
-                            is_correct=parsed_answer.is_correct,
-                        )
-                        for parsed_answer in parsed_question.answers
-                    ]
-                )
 
     return Response(TestDetailSerializer(test).data, status=status.HTTP_201_CREATED)
+
+
+def _create_test_from_parsed_questions(title, description, parsed_questions):
+    test = Test.objects.create(title=title, description=description)
+    blocks_count = 0
+
+    for block_index, start in enumerate(
+        range(0, len(parsed_questions), QUESTIONS_PER_BLOCK),
+        start=1,
+    ):
+        blocks_count = block_index
+        block_questions = parsed_questions[start : start + QUESTIONS_PER_BLOCK]
+        block = TestBlock.objects.create(
+            test=test,
+            title=f"Блок {block_index}",
+            order=block_index,
+        )
+        for parsed_question in block_questions:
+            question = Question.objects.create(
+                block=block,
+                text=parsed_question.text,
+            )
+            Answer.objects.bulk_create(
+                [
+                    Answer(
+                        question=question,
+                        text=parsed_answer.text,
+                        is_correct=parsed_answer.is_correct,
+                    )
+                    for parsed_answer in parsed_question.answers
+                ]
+            )
+
+    return test, blocks_count
 
 
 def _user_payload(user):
