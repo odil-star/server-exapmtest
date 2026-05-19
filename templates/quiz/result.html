@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Результат{% endblock %}
+
+{% block content %}
+<section class="result-layout">
+    <div class="card result-card">
+        <span class="eyebrow">Готово</span>
+        <h1>Результат блока</h1>
+        <div class="score-circle">
+            <strong>{{ result.score }}</strong>
+            <span>из {{ result.total_questions }}</span>
+        </div>
+        <p class="muted">{{ test.title }} · {{ block.title }}</p>
+        <a class="button button-primary button-wide" href="{% url 'test_blocks' test.pk %}">Вернуться к блокам</a>
+    </div>
+
+    <section class="answers-review">
+        <div class="section-title">
+            <span class="eyebrow">Разбор</span>
+            <h2>Ваши ответы</h2>
+        </div>
+
+        {% for user_answer in result.user_answers.all %}
+            <article class="card review-card {% if user_answer.is_correct %}correct{% else %}wrong{% endif %}">
+                <h3>{{ forloop.counter }}. {{ user_answer.question.text }}</h3>
+                <p><span>Выбранный ответ:</span> {{ user_answer.selected_answer.text }}</p>
+                <strong>{% if user_answer.is_correct %}Верно{% else %}Неверно{% endif %}</strong>
+            </article>
+        {% endfor %}
+    </section>
+</section>
+{% endblock %}

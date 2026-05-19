@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Онлайн тесты{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+    <div>
+        <span class="eyebrow">Django</span>
+        <h1>Онлайн тесты</h1>
+        <p>Django сервер работает. API и HTML страницы доступны.</p>
+    </div>
+    <div class="hero-stat">
+        <strong>OK</strong>
+        <span>server</span>
+    </div>
+</section>
+
+<section class="card">
+    <h2>Добро пожаловать</h2>
+    <p class="muted">Откройте список тестов или войдите через Django-авторизацию.</p>
+    <a class="button button-primary button-wide" href="{% url 'test_list' %}">Открыть тесты</a>
+</section>
+{% endblock %}

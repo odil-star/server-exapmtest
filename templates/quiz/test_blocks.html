@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}{{ test.title }}{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+    <div>
+        <a href="{% url 'test_list' %}" class="back-link">← Назад к тестам</a>
+        <span class="eyebrow">Блоки теста</span>
+        <h1>{{ test.title }}</h1>
+        {% if test.description %}
+            <p>{{ test.description }}</p>
+        {% endif %}
+    </div>
+    <div class="hero-stat">
+        <strong>{{ blocks|length }}</strong>
+        <span>блоков</span>
+    </div>
+</section>
+
+<section class="grid">
+    {% for block in blocks %}
+        <article class="card block-card">
+            <div class="block-number">{{ block.order }}</div>
+            <div class="card-head">
+                <span class="eyebrow">Блок</span>
+                <h2>{{ block.title }}</h2>
+            </div>
+            <div class="meta-row">
+                <span>Вопросов</span>
+                <strong>{{ block.questions.count }}</strong>
+            </div>
+            <a class="button button-primary button-wide" href="{% url 'take_block' test.pk block.pk %}">Пройти блок</a>
+        </article>
+    {% empty %}
+        <div class="empty-state">
+            <h2>В этом тесте пока нет блоков</h2>
+            <p>Загрузите вопросы или выберите другой тест.</p>
+        </div>
+    {% endfor %}
+</section>
+{% endblock %}

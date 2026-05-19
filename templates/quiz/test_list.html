@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Список тестов{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+    <div>
+        <span class="eyebrow">Каталог</span>
+        <h1>Доступные тесты</h1>
+        <p>Выберите тест, затем откройте нужный блок вопросов.</p>
+    </div>
+    <div class="hero-stat">
+        <strong>{{ tests|length }}</strong>
+        <span>тестов</span>
+    </div>
+</section>
+
+<section class="grid">
+    {% for test in tests %}
+        <article class="card test-card">
+            <div class="card-head">
+                <span class="eyebrow">Тест</span>
+                <h2>{{ test.title }}</h2>
+            </div>
+            <p class="muted">{{ test.description|default:"Описание не указано." }}</p>
+            <div class="meta-row">
+                <span>Блоков</span>
+                <strong>{{ test.blocks.count }}</strong>
+            </div>
+            <a class="button button-primary button-wide" href="{% url 'test_blocks' test.pk %}">Открыть блоки</a>
+        </article>
+    {% empty %}
+        <div class="empty-state">
+            <h2>Пока нет доступных тестов</h2>
+            <p>Когда администратор загрузит тест, он появится здесь.</p>
+        </div>
+    {% endfor %}
+</section>
+{% endblock %}

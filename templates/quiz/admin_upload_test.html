@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Загрузка теста{% endblock %}
+
+{% block content %}
+<section class="page-hero">
+    <div>
+        <span class="eyebrow">Администрирование</span>
+        <h1>Загрузить тест</h1>
+        <p>Добавьте TXT или DOCX файл, проверьте предпросмотр и сохраните тест с автоматическим делением на блоки.</p>
+    </div>
+</section>
+
+<section class="admin-layout">
+    <div class="card upload-card">
+        <div class="card-head">
+            <span class="eyebrow">Файл</span>
+            <h2>Новый тест</h2>
+        </div>
+
+        <form method="post" enctype="multipart/form-data" class="form">
+            {% csrf_token %}
+            {% if form.non_field_errors %}
+                <div class="message error">{{ form.non_field_errors|striptags }}</div>
+            {% endif %}
+
+            <label>
+                {{ form.title.label }}
+                <input type="text" name="{{ form.title.name }}" maxlength="255" required id="{{ form.title.id_for_label }}" placeholder="Например: Тест по Python" value="{{ form.title.value|default_if_none:'' }}">
+                {% if form.title.errors %}<span class="field-error">{{ form.title.errors|striptags }}</span>{% endif %}
+            </label>
+
+            <label>
+                {{ form.description.label }}
+                <textarea name="{{ form.description.name }}" rows="4" id="{{ form.description.id_for_label }}">{{ form.description.value|default_if_none:'' }}</textarea>
+                {% if form.description.errors %}<span class="field-error">{{ form.description.errors|striptags }}</span>{% endif %}
+            </label>
+
+            <label>
+                {{ form.file.label }}
+                <input type="file" name="{{ form.file.name }}" required id="{{ form.file.id_for_label }}" accept=".txt,.docx">
+                {% if form.file.errors %}<span class="field-error">{{ form.file.errors|striptags }}</span>{% endif %}
+            </label>
+
+            <div class="hint-box">
+                <strong>Формат:</strong> `+++++` начинает вопрос, `=====` разделяет вопрос и ответы, `#` отмечает правильный вариант.
+            </div>
+
+            <button type="submit" class="button button-primary button-wide">Проверить файл</button>
+        </form>
+    </div>
+
+    {% if preview_error %}
+        <aside class="card error-card">
+            <span class="eyebrow">Ошибка</span>
+            <h2>Проблема в файле</h2>
+            <p>{{ preview_error.message }}</p>
+            <p class="muted">Успешно найдено вопросов до ошибки: {{ preview_error.questions_found }}</p>
+            {% if preview_error.question_number %}
+                <strong>Вопрос {{ preview_error.question_number }}</strong>
+            {% endif %}
+            {% if preview_error.question_text %}
+                <p>{{ preview_error.question_text }}</p>
+            {% endif %}
+            {% if preview_error.answers %}
+                <div class="answers-list compact">
+                    {% for answer in preview_error.answers %}
+                        <div class="answer-preview {% if answer.is_correct %}correct{% endif %}">
+                            {% if answer.is_correct %}<strong>Правильный:</strong>{% endif %}
+                            {{ answer.text }}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </aside>
+    {% endif %}
+</section>
+
+{% if preview %}
+    <section class="card preview-card">
+        <div class="preview-head">
+            <div>
+                <span class="eyebrow">Предпросмотр</span>
+                <h2>{{ preview.title }}</h2>
+                <p class="muted">Вопросов: {{ question_count }} · блоков будет создано: {{ block_count }}</p>
+            </div>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_preview">
+                <button type="submit" class="button button-success">Сохранить тест</button>
+            </form>
+        </div>
+
+        <div class="preview-list">
+            {% for question in preview.questions %}
+                <details class="preview-item" {% if forloop.first %}open{% endif %}>
+                    <summary>Вопрос {{ forloop.counter }}: {{ question.text }}</summary>
+                    <div class="answers-list compact">
+                        {% for answer in question.answers %}
+                            <div class="answer-preview {% if answer.is_correct %}correct{% endif %}">
+                                {% if answer.is_correct %}<strong>Правильный:</strong>{% endif %}
+                                {{ answer.text }}
+                            </div>
+                        {% endfor %}
+                    </div>
+                </details>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+{% endblock %}
