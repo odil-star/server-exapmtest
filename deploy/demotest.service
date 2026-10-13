@@ -1,0 +1,20 @@
+# /etc/systemd/system/demotest.service
+[Unit]
+Description=Demotest Django (gunicorn)
+After=network.target postgresql.service
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/demotest
+EnvironmentFile=/etc/demotest/demotest.env
+ExecStart=/srv/demotest/venv/bin/gunicorn online_tests.wsgi:application \
+    --workers 3 \
+    --bind unix:/run/demotest/gunicorn.sock \
+    --access-logfile - --error-logfile -
+RuntimeDirectory=demotest
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

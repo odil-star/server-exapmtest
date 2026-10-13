@@ -2,14 +2,18 @@ from django.contrib import messages
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
-from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import TestUploadForm
-from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer
+from .models import Answer, Test, TestBlock, TestResult
 from .parser import ParseQuestionsError, ParsedAnswer, ParsedQuestion, parse_test_file
+from .services import (
+    QUESTIONS_PER_BLOCK,
+    create_result,
+    create_test_from_parsed_questions,
+    format_upload_error,
+)
 
-QUESTIONS_PER_BLOCK = 25
 UPLOAD_PREVIEW_SESSION_KEY = "upload_test_preview"
 
 
@@ -65,27 +69,12 @@ def take_block(request, test_id, block_id):
                 {"test": test, "block": block, "questions": questions},
             )
 
-        score = sum(1 for answer in selected_answers.values() if answer.is_correct)
-
-        with transaction.atomic():
-            result = TestResult.objects.create(
-                user=request.user,
-                test=test,
-                block=block,
-                score=score,
-                total_questions=len(questions),
-            )
-            UserAnswer.objects.bulk_create(
-                [
-                    UserAnswer(
-                        result=result,
-                        question=question,
-                        selected_answer=selected_answers[question.id],
-                        is_correct=selected_answers[question.id].is_correct,
-                    )
-                    for question in questions
-                ]
-            )
+        create_result(
+            request.user,
+            test,
+            block,
+            [(question, selected_answers[question.id]) for question in questions],
+        )
 
         return redirect("block_result", test_id=test.pk, block_id=block.pk)
 
@@ -132,7 +121,7 @@ def admin_upload_test(request):
             try:
                 parsed_questions = parse_test_file(form.cleaned_data["file"])
             except (ValidationError, ValueError) as exc:
-                error = _format_upload_error(exc)
+                error = format_upload_error(exc)
                 form.add_error("file", error)
                 messages.error(request, error)
                 return render(
@@ -179,38 +168,12 @@ def _save_upload_preview(request):
 
     parsed_questions = _dicts_to_questions(preview["questions"])
 
-    with transaction.atomic():
-        test = Test.objects.create(
-            title=preview["title"],
-            description=preview["description"],
-        )
-
-        for block_index, start in enumerate(
-            range(0, len(parsed_questions), QUESTIONS_PER_BLOCK),
-            start=1,
-        ):
-            block_questions = parsed_questions[start : start + QUESTIONS_PER_BLOCK]
-            block = TestBlock.objects.create(
-                test=test,
-                title=f"Блок {block_index}",
-                order=block_index,
-            )
-
-            for parsed_question in block_questions:
-                question = Question.objects.create(
-                    block=block,
-                    text=parsed_question.text,
-                )
-                Answer.objects.bulk_create(
-                    [
-                        Answer(
-                            question=question,
-                            text=parsed_answer.text,
-                            is_correct=parsed_answer.is_correct,
-                        )
-                        for parsed_answer in parsed_question.answers
-                    ]
-                )
+    test, _blocks_count = create_test_from_parsed_questions(
+        title=preview["title"],
+        description=preview["description"],
+        parsed_questions=parsed_questions,
+        created_by=request.user,
+    )
 
     request.session.pop(UPLOAD_PREVIEW_SESSION_KEY, None)
     messages.success(request, "Тест успешно сохранен и разбит на блоки.")
@@ -258,9 +221,3 @@ def _build_preview_error(exc):
 
 def _count_blocks(question_count):
     return (question_count + QUESTIONS_PER_BLOCK - 1) // QUESTIONS_PER_BLOCK
-
-
-def _format_upload_error(exc):
-    if isinstance(exc, ValidationError):
-        return " ".join(exc.messages)
-    return str(exc)

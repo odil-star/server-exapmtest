@@ -1,5 +1,7 @@
+import random
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -7,34 +9,70 @@ from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.authtoken.models import Token
 from rest_framework.authentication import TokenAuthentication
-from rest_framework.decorators import api_view, authentication_classes, parser_classes, permission_classes
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    parser_classes,
+    permission_classes,
+    throttle_classes,
+)
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import exception_handler
 
 from .forms import TestUploadForm
 from .models import (
-    Answer,
     Question,
     Test,
     TestBlock,
     TestResult,
     UserActivity,
-    UserAnswer,
     UserProfile,
 )
 from .parser import ParseQuestionsError, parse_test_file
 from .serializers import (
     BlockDetailSerializer,
+    CheckAnswerSerializer,
+    RegisterSerializer,
+    RoleSerializer,
+    SubmitAnswersSerializer,
     TestBlockSerializer,
     TestDetailSerializer,
     TestListSerializer,
     TestResultDetailSerializer,
 )
-from .views import QUESTIONS_PER_BLOCK, _format_upload_error
+from .services import (
+    ROLE_ADMIN,
+    ROLE_USER,
+    FreeLimitReached,
+    can_upload_tests,
+    consume_free_answers,
+    limit_payload,
+    RANDOM_TEST_TITLE,
+    best_results_by_user,
+    create_result,
+    create_test_from_parsed_questions,
+    format_upload_error,
+    get_role,
+    leaderboard_rank_for_user,
+    percent_of,
+    set_role,
+)
+
+RANDOM_TEST_MAX_QUESTIONS = 50
+LEADERBOARD_SIZE = 5
+
+
+class LoginRateThrottle(AnonRateThrottle):
+    scope = "login"
+
+
+class RegisterRateThrottle(AnonRateThrottle):
+    scope = "register"
 
 
 def api_exception_handler(exc, context):
@@ -52,34 +90,107 @@ def api_exception_handler(exc, context):
     return response
 
 
+def _bad_request(detail):
+    return Response({"detail": detail}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _first_error(errors):
+    """Достает первое сообщение об ошибке из вложенной структуры serializer.errors."""
+    if isinstance(errors, dict):
+        for value in errors.values():
+            return _first_error(value)
+    if isinstance(errors, (list, tuple)):
+        for value in errors:
+            return _first_error(value)
+    return str(errors)
+
+
+def _validated(serializer_class, data):
+    """Возвращает (validated_data, None) или (None, 400-ответ)."""
+    serializer = serializer_class(data=data)
+    if not serializer.is_valid():
+        return None, _bad_request(_first_error(serializer.errors))
+    return serializer.validated_data, None
+
+
+def _limit_response(exc):
+    """402: бесплатный лимит исчерпан, нужен премиум (выдает администратор)."""
+    return Response(
+        {
+            "detail": (
+                f"Бесплатный лимит ({exc.limit} ответов) исчерпан. "
+                "Чтобы продолжить, оформите премиум через администратора."
+            ),
+            "code": "free_limit_reached",
+            "free_answers_limit": exc.limit,
+            "free_answers_used": exc.used,
+            "free_answers_left": 0,
+        },
+        status=status.HTTP_402_PAYMENT_REQUIRED,
+    )
+
+
+def _is_admin(user):
+    return user.is_staff or user.is_superuser
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@authentication_classes([])
+def api_health(request):
+    return Response({"status": "ok"})
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def api_login(request):
     username = request.data.get("username")
     password = request.data.get("password")
 
     if not username or not password:
-        return Response(
-            {"detail": "Введите логин и пароль."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return _bad_request("Введите логин и пароль.")
 
     user = authenticate(username=username, password=password)
     if user is None:
-        return Response(
-            {"detail": "Неверный логин или пароль."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return _bad_request("Неверный логин или пароль.")
 
     token, _created = Token.objects.get_or_create(user=user)
     _update_user_activity(user)
     return Response(
         {
             "token": token.key,
-            "username": user.username,
-            "is_staff": user.is_staff,
-            "is_superuser": user.is_superuser,
+            **_user_payload(user, include_auth_flag=False),
         }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([RegisterRateThrottle])
+def api_register(request):
+    if not getattr(settings, "REGISTRATION_ENABLED", True):
+        return Response(
+            {"detail": "Регистрация отключена."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Роль в регистрации не принимается: новый аккаунт всегда обычный пользователь.
+    payload, error = _validated(RegisterSerializer, request.data)
+    if error:
+        return error
+
+    User = get_user_model()
+    user = User.objects.create_user(
+        username=payload["username"],
+        email=payload.get("email", ""),
+        password=payload["password"],
+    )
+    token, _created = Token.objects.get_or_create(user=user)
+    _update_user_activity(user)
+    return Response(
+        {"token": token.key, **_user_payload(user, include_auth_flag=False)},
+        status=status.HTTP_201_CREATED,
     )
 
 
@@ -102,27 +213,17 @@ def api_me(request):
 def api_profile(request):
     profile, _created = UserProfile.objects.get_or_create(user=request.user)
 
-    if request.method == "PATCH":
-        if "nickname" in request.data:
-            nickname = str(request.data.get("nickname", "")).strip()
-            if not nickname:
-                return Response(
-                    {"detail": "Никнейм не может быть пустым."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if len(nickname) < 2:
-                return Response(
-                    {"detail": "Никнейм должен содержать минимум 2 символа."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if len(nickname) > 50:
-                return Response(
-                    {"detail": "Никнейм должен быть не длиннее 50 символов."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+    if request.method == "PATCH" and "nickname" in request.data:
+        nickname = str(request.data.get("nickname", "")).strip()
+        if not nickname:
+            return _bad_request("Никнейм не может быть пустым.")
+        if len(nickname) < 2:
+            return _bad_request("Никнейм должен содержать минимум 2 символа.")
+        if len(nickname) > 50:
+            return _bad_request("Никнейм должен быть не длиннее 50 символов.")
 
-            profile.nickname = nickname
-            profile.save(update_fields=["nickname", "updated_at"])
+        profile.nickname = nickname
+        profile.save(update_fields=["nickname", "updated_at"])
 
     return Response(_profile_payload(request.user, profile))
 
@@ -132,10 +233,32 @@ def api_profile(request):
 def api_tests(request):
     tests = (
         Test.objects.filter(is_active=True)
+        .select_related("created_by")
         .annotate(block_count=Count("blocks"))
         .order_by("-created_at")
     )
     return Response(TestListSerializer(tests, many=True).data)
+
+
+def _upload_test(title, description, uploaded_file, created_by=None, max_questions=None):
+    """Общая логика загрузки: (test, blocks_count, questions_count) или (None, None, ошибка)."""
+    try:
+        parsed_questions = parse_test_file(uploaded_file)
+    except (ParseQuestionsError, ValidationError, ValueError) as exc:
+        return None, None, format_upload_error(exc)
+
+    if max_questions is not None and len(parsed_questions) > max_questions:
+        return None, None, (
+            f"В тесте {len(parsed_questions)} вопросов, максимум — {max_questions}."
+        )
+
+    test, blocks_count = create_test_from_parsed_questions(
+        title=title,
+        description=description,
+        parsed_questions=parsed_questions,
+        created_by=created_by,
+    )
+    return test, blocks_count, len(parsed_questions)
 
 
 @api_view(["POST"])
@@ -143,9 +266,14 @@ def api_tests(request):
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def api_upload_test(request):
-    if not request.user.is_staff and not request.user.is_superuser:
+    if not can_upload_tests(request.user):
         return Response(
-            {"detail": "Нет доступа. Только администратор может загружать тесты."},
+            {
+                "detail": (
+                    "Нет доступа. Загружать тесты могут премиум-пользователи "
+                    "и администраторы."
+                )
+            },
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -154,42 +282,52 @@ def api_upload_test(request):
     uploaded_file = request.FILES.get("file")
 
     if not title:
-        return Response(
-            {"detail": "Введите название теста."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
+        return _bad_request("Введите название теста.")
     if not uploaded_file:
-        return Response(
-            {"detail": "Файл не отправлен."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        return _bad_request("Файл не отправлен.")
 
-    try:
-        parsed_questions = parse_test_file(uploaded_file)
-    except (ParseQuestionsError, ValidationError, ValueError) as exc:
-        return Response(
-            {"detail": _format_upload_error(exc)},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    with transaction.atomic():
-        test, blocks_count = _create_test_from_parsed_questions(
-            title=title,
-            description=description,
-            parsed_questions=parsed_questions,
-        )
+    # Для премиум-пользователей размер теста ограничен, администраторы без лимита.
+    max_questions = None if _is_admin(request.user) else settings.PREMIUM_UPLOAD_MAX_QUESTIONS
+    test, blocks_count, questions_count = _upload_test(
+        title,
+        description,
+        uploaded_file,
+        created_by=request.user,
+        max_questions=max_questions,
+    )
+    if test is None:
+        return _bad_request(questions_count)
 
     return Response(
         {
             "success": True,
             "test_id": test.id,
             "title": test.title,
-            "questions_count": len(parsed_questions),
+            "questions_count": questions_count,
             "blocks_count": blocks_count,
         },
         status=status.HTTP_201_CREATED,
     )
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminUser])
+def api_admin_upload_test(request):
+    """Устаревший эндпоинт (form-based). Оставлен для совместимости с фронтом."""
+    form = TestUploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return Response(form.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    test, _blocks_count, error = _upload_test(
+        form.cleaned_data["title"],
+        form.cleaned_data["description"],
+        form.cleaned_data["file"],
+        created_by=request.user,
+    )
+    if test is None:
+        return Response({"file": [error]}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(TestDetailSerializer(test).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["GET"])
@@ -216,51 +354,32 @@ def api_admin_stats(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def api_leaderboard(request):
-    results = (
-        TestResult.objects.select_related("user", "test", "block")
-        .prefetch_related("user_answers__question__block")
-        .order_by("-created_at")
-    )
+    test_id = request.query_params.get("test_id")
+    if test_id is not None:
+        try:
+            test_id = int(test_id)
+        except ValueError:
+            return Response(
+                {"detail": "test_id должен быть числом."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-    best_by_user = {}
-    for result in results:
-        total = result.total_questions or 0
-        percent = round((result.score / total) * 100) if total else 0
-        blocks = {
-            user_answer.question.block_id
-            for user_answer in result.user_answers.all()
-        }
-        is_random = len(blocks) > 1
-        item = {
-            "result": result,
-            "username": result.user.username,
-            "percent": percent,
-            "score": result.score,
-            "total": total,
-            "test_title": "Случайный тест" if is_random else result.test.title,
-            "completed_at": result.created_at,
-        }
-
-        current = best_by_user.get(result.user_id)
-        if current is None or _leaderboard_sort_key(item) < _leaderboard_sort_key(current):
-            best_by_user[result.user_id] = item
-
-    leaders = sorted(best_by_user.values(), key=_leaderboard_sort_key)[:5]
+    leaders = best_results_by_user(test_id)[:LEADERBOARD_SIZE]
 
     return Response(
         {
             "results": [
                 {
                     "rank": index,
-                    "username": item["username"],
-                    "percent": item["percent"],
-                    "score": item["score"],
-                    "total": item["total"],
-                    "test_title": item["test_title"],
-                    "block_title": item["result"].block.title if item["result"].block else "",
-                    "completed_at": _format_completed_at(item["completed_at"]),
+                    "username": result.user.username,
+                    "percent": percent_of(result.score, result.total_questions),
+                    "score": result.score,
+                    "total": result.total_questions,
+                    "test_title": RANDOM_TEST_TITLE if result.is_random else result.test.title,
+                    "block_title": "" if result.is_random else result.block.title,
+                    "completed_at": _format_completed_at(result.created_at),
                 }
-                for index, item in enumerate(leaders, start=1)
+                for index, result in enumerate(leaders, start=1)
             ]
         }
     )
@@ -301,35 +420,35 @@ def api_random_block(request, test_id):
     test = get_object_or_404(Test, id=test_id, is_active=True)
 
     try:
-        count = int(request.GET.get("count", 50))
+        count = int(request.GET.get("count", RANDOM_TEST_MAX_QUESTIONS))
     except ValueError:
-        count = 50
-    count = max(1, min(count, 50))
+        count = RANDOM_TEST_MAX_QUESTIONS
+    count = max(1, min(count, RANDOM_TEST_MAX_QUESTIONS))
 
+    # Выбираем id и сэмплируем в Python: ORDER BY RANDOM() сортирует всю таблицу.
+    question_ids = list(Question.objects.filter(block__test=test).values_list("id", flat=True))
+    picked_ids = random.sample(question_ids, min(count, len(question_ids)))
     questions = list(
-        Question.objects
-        .filter(block__test=test)
-        .prefetch_related("answers")
-        .order_by("?")[:count]
+        Question.objects.filter(id__in=picked_ids).prefetch_related("answers")
     )
+    random.shuffle(questions)
+
+    def shuffled_answers(question):
+        answers = list(question.answers.all())
+        random.shuffle(answers)
+        return [{"id": answer.id, "text": answer.text} for answer in answers]
 
     return Response(
         {
             "id": f"random-{test.id}",
-            "title": "Случайный тест",
+            "title": RANDOM_TEST_TITLE,
             "test_id": test.id,
             "question_count": len(questions),
             "questions": [
                 {
                     "id": question.id,
                     "text": question.text,
-                    "answers": [
-                        {
-                            "id": answer.id,
-                            "text": answer.text,
-                        }
-                        for answer in question.answers.all()
-                    ],
+                    "answers": shuffled_answers(question),
                 }
                 for question in questions
             ],
@@ -337,142 +456,43 @@ def api_random_block(request, test_id):
     )
 
 
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def api_random_check_answer(request):
-    question_id = request.data.get("question_id")
-    answer_id = request.data.get("answer_id")
-
-    if question_id is None or answer_id is None:
-        return Response(
-            {"detail": "Нужно передать question_id и answer_id."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+def _check_answer(user, question_queryset, data):
+    payload, error = _validated(CheckAnswerSerializer, data)
+    if error:
+        return error
 
     question = get_object_or_404(
-        Question.objects.filter(block__test__is_active=True).prefetch_related("answers"),
-        id=question_id,
+        question_queryset.prefetch_related("answers"),
+        id=payload["question_id"],
     )
-    selected_answer = get_object_or_404(Answer, id=answer_id, question=question)
-    correct_answer = question.answers.filter(is_correct=True).first()
+    answers = list(question.answers.all())
+    selected_answer = next((a for a in answers if a.id == payload["answer_id"]), None)
+    if selected_answer is None:
+        return _bad_request("Вариант ответа не относится к этому вопросу.")
+    correct_answer = next((a for a in answers if a.is_correct), None)
+
+    try:
+        consume_free_answers(user, [question.id])
+    except FreeLimitReached as exc:
+        return _limit_response(exc)
 
     return Response(
         {
             "is_correct": selected_answer.is_correct,
             "selected_answer_id": selected_answer.id,
             "correct_answer_id": correct_answer.id if correct_answer else None,
+            **limit_payload(user),
         }
     )
 
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
-def api_random_submit(request):
-    submitted_answers = request.data.get("answers", [])
-
-    if not isinstance(submitted_answers, list):
-        return Response(
-            {"detail": "Поле answers должно быть списком."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    question_ids = []
-    selected_by_question = {}
-    for item in submitted_answers:
-        question_id = item.get("question_id")
-        answer_id = item.get("answer_id")
-        if question_id is None or answer_id is None:
-            return Response(
-                {"detail": "Каждый ответ должен содержать question_id и answer_id."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            question_id = int(question_id)
-            answer_id = int(answer_id)
-        except (TypeError, ValueError):
-            return Response(
-                {"detail": "question_id и answer_id должны быть числами."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        question_ids.append(question_id)
-        selected_by_question[question_id] = answer_id
-
-    questions = list(
-        Question.objects.filter(
-            id__in=question_ids,
-            block__test__is_active=True,
-        ).prefetch_related("answers")
-    )
-    questions_by_id = {question.id: question for question in questions}
-
-    if set(questions_by_id) != set(question_ids):
-        return Response(
-            {"detail": "Один или несколько вопросов не найдены."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    score = 0
-    answer_details = []
-    selected_answers = {}
-    for question_id in question_ids:
-        question = questions_by_id[question_id]
-        selected_answer = get_object_or_404(
-            Answer,
-            id=selected_by_question[question_id],
-            question=question,
-        )
-        selected_answers[question_id] = selected_answer
-        correct_answer = question.answers.filter(is_correct=True).first()
-        is_correct = selected_answer.is_correct
-        if is_correct:
-            score += 1
-
-        answer_details.append(
-            {
-                "question": question.text,
-                "selected_answer": selected_answer.text,
-                "correct_answer": correct_answer.text if correct_answer else "",
-                "is_correct": is_correct,
-            }
-        )
-
-    total = len(question_ids)
-    percent = round((score / total) * 100) if total else 0
-
-    result = None
-    if questions:
-        first_question = questions[0]
-        with transaction.atomic():
-            result = TestResult.objects.create(
-                user=request.user,
-                test=first_question.block.test,
-                block=first_question.block,
-                score=score,
-                total_questions=total,
-            )
-            UserAnswer.objects.bulk_create(
-                [
-                    UserAnswer(
-                        result=result,
-                        question=question,
-                        selected_answer=selected_answers[question.id],
-                        is_correct=selected_answers[question.id].is_correct,
-                    )
-                    for question in questions
-                ]
-            )
-
-    return Response(
-        {
-            "result_id": result.id if result else None,
-            "score": score,
-            "total": total,
-            "percent": percent,
-            "block_title": "Случайный тест",
-            "answers": answer_details,
-        }
+def api_random_check_answer(request):
+    return _check_answer(
+        request.user,
+        Question.objects.filter(block__test__is_active=True),
+        request.data,
     )
 
 
@@ -480,24 +500,84 @@ def api_random_submit(request):
 @permission_classes([IsAuthenticated])
 def api_check_answer(request, block_id):
     block = get_object_or_404(TestBlock, pk=block_id, test__is_active=True)
-    question_id = request.data.get("question_id")
-    answer_id = request.data.get("answer_id")
+    return _check_answer(request.user, Question.objects.filter(block=block), request.data)
 
-    if question_id is None or answer_id is None:
-        return Response(
-            {"detail": "Нужно передать question_id и answer_id."},
-            status=status.HTTP_400_BAD_REQUEST,
+
+def _resolve_selected_answers(questions, selected_by_question):
+    """Сопоставляет выбранные answer_id с вопросами.
+
+    Возвращает ([(question, answer), ...], None) или (None, текст ошибки).
+    """
+    pairs = []
+    for question in questions:
+        answer_id = selected_by_question[question.id]
+        answer = next((a for a in question.answers.all() if a.id == answer_id), None)
+        if answer is None:
+            return None, "Вариант ответа не относится к вопросу."
+        pairs.append((question, answer))
+    return pairs, None
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def api_random_submit(request):
+    payload, error = _validated(SubmitAnswersSerializer, request.data)
+    if error:
+        return error
+
+    selected_by_question = {item["question_id"]: item["answer_id"] for item in payload["answers"]}
+    questions_by_id = {
+        question.id: question
+        for question in Question.objects.filter(
+            id__in=selected_by_question,
+            block__test__is_active=True,
         )
+        .select_related("block__test")
+        .prefetch_related("answers")
+    }
 
-    question = get_object_or_404(Question, id=question_id, block=block)
-    selected_answer = get_object_or_404(Answer, id=answer_id, question=question)
-    correct_answer = question.answers.filter(is_correct=True).first()
+    if set(questions_by_id) != set(selected_by_question):
+        return _bad_request("Один или несколько вопросов не найдены.")
+
+    # Порядок как в запросе клиента.
+    questions = [questions_by_id[item["question_id"]] for item in payload["answers"]]
+    pairs, error_detail = _resolve_selected_answers(questions, selected_by_question)
+    if error_detail:
+        return _bad_request(error_detail)
+
+    first_question = questions[0]
+    try:
+        with transaction.atomic():
+            consume_free_answers(request.user, [question.id for question in questions])
+            result = create_result(
+                request.user,
+                first_question.block.test,
+                first_question.block,
+                pairs,
+                is_random=True,
+            )
+    except FreeLimitReached as exc:
+        return _limit_response(exc)
 
     return Response(
         {
-            "is_correct": selected_answer.is_correct,
-            "selected_answer_id": selected_answer.id,
-            "correct_answer_id": correct_answer.id if correct_answer else None,
+            "result_id": result.id,
+            "score": result.score,
+            "total": result.total_questions,
+            "percent": percent_of(result.score, result.total_questions),
+            "block_title": RANDOM_TEST_TITLE,
+            **limit_payload(request.user),
+            "answers": [
+                {
+                    "question": question.text,
+                    "selected_answer": answer.text,
+                    "correct_answer": next(
+                        (a.text for a in question.answers.all() if a.is_correct), ""
+                    ),
+                    "is_correct": answer.is_correct,
+                }
+                for question, answer in pairs
+            ],
         }
     )
 
@@ -510,76 +590,40 @@ def api_submit_block(request, block_id):
         pk=block_id,
         test__is_active=True,
     )
+    payload, error = _validated(SubmitAnswersSerializer, request.data)
+    if error:
+        return error
+
     questions = list(block.questions.all())
-    submitted_answers = request.data.get("answers", [])
+    selected_by_question = {item["question_id"]: item["answer_id"] for item in payload["answers"]}
 
-    if not isinstance(submitted_answers, list):
-        return Response(
-            {"detail": "Поле answers должно быть списком."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    block_question_ids = {question.id for question in questions}
+    if get_role(request.user) == ROLE_USER:
+        # Обычный пользователь ограничен лимитом: засчитываются только отвеченные вопросы.
+        if not set(selected_by_question) <= block_question_ids:
+            return _bad_request("Ответы содержат вопросы не из этого блока.")
+        questions = [q for q in questions if q.id in selected_by_question]
+    elif set(selected_by_question) != block_question_ids:
+        return _bad_request("Нужно ответить на все вопросы блока.")
 
-    selected_by_question = {}
-    for item in submitted_answers:
-        question_id = item.get("question_id")
-        answer_id = item.get("answer_id")
-        if question_id is None or answer_id is None:
-            return Response(
-                {
-                    "detail": (
-                        "Каждый ответ должен содержать question_id и answer_id."
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        selected_by_question[int(question_id)] = int(answer_id)
+    pairs, error_detail = _resolve_selected_answers(questions, selected_by_question)
+    if error_detail:
+        return _bad_request(error_detail)
 
-    question_ids = {question.id for question in questions}
-    if set(selected_by_question) != question_ids:
-        return Response(
-            {"detail": "Нужно ответить на все вопросы блока."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
-    selected_answers = {}
-    for question in questions:
-        answer = get_object_or_404(
-            Answer,
-            id=selected_by_question[question.id],
-            question=question,
-        )
-        selected_answers[question.id] = answer
-
-    score = sum(1 for answer in selected_answers.values() if answer.is_correct)
-    total = len(questions)
-    percent = round((score / total) * 100) if total else 0
-
-    with transaction.atomic():
-        result = TestResult.objects.create(
-            user=request.user,
-            test=block.test,
-            block=block,
-            score=score,
-            total_questions=total,
-        )
-        UserAnswer.objects.bulk_create(
-            [
-                UserAnswer(
-                    result=result,
-                    question=question,
-                    selected_answer=selected_answers[question.id],
-                    is_correct=selected_answers[question.id].is_correct,
-                )
-                for question in questions
-            ]
-        )
+    try:
+        with transaction.atomic():
+            consume_free_answers(request.user, [question.id for question in questions])
+            result = create_result(request.user, block.test, block, pairs)
+    except FreeLimitReached as exc:
+        return _limit_response(exc)
 
     return Response(
         {
             "result_id": result.id,
-            "score": score,
-            "total": total,
-            "percent": percent,
+            "score": result.score,
+            "total": result.total_questions,
+            "percent": percent_of(result.score, result.total_questions),
+            **limit_payload(request.user),
         }
     )
 
@@ -598,63 +642,51 @@ def api_result_detail(request, result_id):
     return Response(TestResultDetailSerializer(result).data)
 
 
-@api_view(["POST"])
+@api_view(["GET"])
 @permission_classes([IsAdminUser])
-def api_admin_upload_test(request):
-    form = TestUploadForm(request.POST, request.FILES)
-    if not form.is_valid():
-        return Response(form.errors, status=status.HTTP_400_BAD_REQUEST)
+def api_admin_users(request):
+    User = get_user_model()
+    users = User.objects.select_related("profile").order_by("username")
+    return Response(
+        [
+            {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email or "",
+                "role": get_role(user),
+                "is_superuser": user.is_superuser,
+                "date_joined": _format_completed_at(user.date_joined),
+            }
+            for user in users
+        ]
+    )
 
-    try:
-        parsed_questions = parse_test_file(form.cleaned_data["file"])
-    except (ParseQuestionsError, ValidationError, ValueError) as exc:
+
+@api_view(["PATCH"])
+@permission_classes([IsAdminUser])
+def api_admin_user_role(request, user_id):
+    target = get_object_or_404(get_user_model(), pk=user_id)
+    payload, error = _validated(RoleSerializer, request.data)
+    if error:
+        return error
+    new_role = payload["role"]
+
+    if target.pk == request.user.pk:
+        return _bad_request("Нельзя изменить собственную роль.")
+    if target.is_superuser:
         return Response(
-            {"file": [_format_upload_error(exc)]},
-            status=status.HTTP_400_BAD_REQUEST,
+            {"detail": "Роль суперпользователя изменить нельзя."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    # Назначать и снимать админов может только суперпользователь.
+    if (new_role == ROLE_ADMIN or target.is_staff) and not request.user.is_superuser:
+        return Response(
+            {"detail": "Управлять администраторами может только суперпользователь."},
+            status=status.HTTP_403_FORBIDDEN,
         )
 
-    with transaction.atomic():
-        test, _blocks_count = _create_test_from_parsed_questions(
-            title=form.cleaned_data["title"],
-            description=form.cleaned_data["description"],
-            parsed_questions=parsed_questions,
-        )
-
-    return Response(TestDetailSerializer(test).data, status=status.HTTP_201_CREATED)
-
-
-def _create_test_from_parsed_questions(title, description, parsed_questions):
-    test = Test.objects.create(title=title, description=description)
-    blocks_count = 0
-
-    for block_index, start in enumerate(
-        range(0, len(parsed_questions), QUESTIONS_PER_BLOCK),
-        start=1,
-    ):
-        blocks_count = block_index
-        block_questions = parsed_questions[start : start + QUESTIONS_PER_BLOCK]
-        block = TestBlock.objects.create(
-            test=test,
-            title=f"Блок {block_index}",
-            order=block_index,
-        )
-        for parsed_question in block_questions:
-            question = Question.objects.create(
-                block=block,
-                text=parsed_question.text,
-            )
-            Answer.objects.bulk_create(
-                [
-                    Answer(
-                        question=question,
-                        text=parsed_answer.text,
-                        is_correct=parsed_answer.is_correct,
-                    )
-                    for parsed_answer in parsed_question.answers
-                ]
-            )
-
-    return test, blocks_count
+    set_role(target, new_role)
+    return Response({"id": target.id, "username": target.username, "role": get_role(target)})
 
 
 def _update_user_activity(user):
@@ -664,76 +696,38 @@ def _update_user_activity(user):
     )
 
 
-def _user_payload(user):
-    return {
-        "is_authenticated": True,
+def _user_payload(user, include_auth_flag=True):
+    payload = {
         "username": user.username,
+        "role": get_role(user),
         "is_staff": user.is_staff,
         "is_superuser": user.is_superuser,
+        **limit_payload(user),
     }
+    if include_auth_flag:
+        payload["is_authenticated"] = True
+    return payload
 
 
 def _profile_payload(user, profile):
-    results = list(
-        TestResult.objects.filter(user=user)
-        .select_related("test", "block")
-        .order_by("-created_at")
+    totals = list(
+        TestResult.objects.filter(user=user).values_list("score", "total_questions")
     )
-    percents = [_result_percent(result) for result in results]
-    best_percent = max(percents) if percents else 0
-    average_percent = round(sum(percents) / len(percents)) if percents else 0
+    percents = [percent_of(score, total) for score, total in totals]
 
     return {
         "username": user.username,
+        "role": get_role(user),
         "nickname": profile.nickname,
         "email": user.email or "",
         "date_joined": _format_completed_at(user.date_joined),
-        "tests_completed": len(results),
-        "best_percent": best_percent,
-        "average_percent": average_percent,
-        "leaderboard_rank": _leaderboard_rank_for_user(user.id),
+        "tests_completed": len(percents),
+        "best_percent": max(percents) if percents else 0,
+        "average_percent": round(sum(percents) / len(percents)) if percents else 0,
+        "leaderboard_rank": leaderboard_rank_for_user(user.id),
+        **limit_payload(user),
         "avatar_color": profile.avatar_color,
     }
-
-
-def _result_percent(result):
-    total = result.total_questions or 0
-    if not total:
-        return 0
-    return round((result.score / total) * 100)
-
-
-def _leaderboard_rank_for_user(user_id):
-    results = (
-        TestResult.objects.select_related("user", "test", "block")
-        .prefetch_related("user_answers__question__block")
-        .order_by("-created_at")
-    )
-    best_by_user = {}
-
-    for result in results:
-        item = {
-            "result": result,
-            "username": result.user.username,
-            "percent": _result_percent(result),
-            "score": result.score,
-            "total": result.total_questions or 0,
-            "test_title": result.test.title,
-            "completed_at": result.created_at,
-        }
-        current = best_by_user.get(result.user_id)
-        if current is None or _leaderboard_sort_key(item) < _leaderboard_sort_key(current):
-            best_by_user[result.user_id] = item
-
-    for index, item in enumerate(sorted(best_by_user.values(), key=_leaderboard_sort_key), start=1):
-        if item["result"].user_id == user_id:
-            return index
-
-    return None
-
-
-def _leaderboard_sort_key(item):
-    return (-item["percent"], -item["score"], item["completed_at"])
 
 
 def _format_completed_at(value):

@@ -7,6 +7,14 @@ class Test(models.Model):
     description = models.TextField("Описание", blank=True)
     created_at = models.DateTimeField("Дата создания", auto_now_add=True)
     is_active = models.BooleanField("Активен", default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_tests",
+        verbose_name="Автор",
+    )
 
     class Meta:
         ordering = ["-created_at"]
@@ -82,6 +90,7 @@ class UserProfile(models.Model):
     )
     nickname = models.CharField("Никнейм", max_length=50, blank=True)
     avatar_color = models.CharField("Цвет аватара", max_length=20, default="#2563eb")
+    is_premium = models.BooleanField("Премиум пользователь", default=False)
     created_at = models.DateTimeField("Дата создания", auto_now_add=True)
     updated_at = models.DateTimeField("Дата обновления", auto_now=True)
 
@@ -131,10 +140,12 @@ class TestResult(models.Model):
     )
     score = models.PositiveIntegerField("Правильных ответов")
     total_questions = models.PositiveIntegerField("Всего вопросов")
+    is_random = models.BooleanField("Случайный тест", default=False)
     created_at = models.DateTimeField("Дата прохождения", auto_now_add=True)
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [models.Index(fields=["user", "-created_at"], name="result_user_created_idx")]
         verbose_name = "Результат теста"
         verbose_name_plural = "Результаты тестов"
 
@@ -167,3 +178,32 @@ class UserAnswer(models.Model):
 
     def __str__(self):
         return f"{self.question} - {self.selected_answer}"
+
+
+class AnsweredQuestion(models.Model):
+    """Вопросы, на которые обычный (не премиум) пользователь уже ответил.
+
+    Нужна для бесплатного лимита: повторный ответ на тот же вопрос лимит не тратит.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="answered_questions",
+        verbose_name="Пользователь",
+    )
+    question = models.ForeignKey(
+        Question,
+        on_delete=models.CASCADE,
+        related_name="+",
+        verbose_name="Вопрос",
+    )
+    created_at = models.DateTimeField("Дата", auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "question")
+        verbose_name = "Использованный вопрос (лимит)"
+        verbose_name_plural = "Использованные вопросы (лимит)"
+
+    def __str__(self):
+        return f"{self.user} - {self.question_id}"

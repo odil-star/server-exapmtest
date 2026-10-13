@@ -12,11 +12,15 @@ def api_not_found(request, path=None):
 
 
 urlpatterns = [
+    path("health/", api_views.api_health, name="api_health"),
+    path("register/", api_views.api_register, name="api_register"),
     path("login/", api_views.api_login, name="api_login"),
     path("logout/", api_views.api_logout, name="api_logout"),
     path("me/", api_views.api_me, name="api_me"),
     path("profile/", api_views.api_profile, name="api_profile"),
     path("leaderboard/", api_views.api_leaderboard, name="api_leaderboard"),
+    path("admin/users/", api_views.api_admin_users, name="api_admin_users"),
+    path("admin/users/<int:user_id>/role/", api_views.api_admin_user_role, name="api_admin_user_role"),
     path("admin/stats/", api_views.api_admin_stats, name="api_admin_stats"),
     path("tests/", api_views.api_tests, name="api_tests"),
     path("tests/upload/", api_views.api_upload_test, name="api_upload_test"),

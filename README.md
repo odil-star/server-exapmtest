@@ -19,8 +19,15 @@ python manage.py runserver
 
 Production-настройки берутся из переменных окружения:
 
+`SECRET_KEY` обязателен при `DEBUG=False` (без него приложение не стартует).
+`DATABASE_URL` (например, Postgres на Render) включает внешнюю БД, без него используется
+локальный `db.sqlite3`. Лимит попыток логина задается `LOGIN_THROTTLE_RATE` (по умолчанию `10/min`).
+
+Тесты: `python manage.py test quiz`.
+
 ```powershell
 $env:SECRET_KEY="change-me"
+$env:DATABASE_URL="postgres://user:pass@host:5432/dbname"
 $env:DEBUG="False"
 $env:ALLOWED_HOSTS="server-exapmtest.onrender.com,127.0.0.1,localhost"
 $env:CORS_ALLOWED_ORIGINS="https://odil-star.github.io,https://server-exapmtest.onrender.com"
@@ -35,6 +42,49 @@ Authorization: Token <token>
 ```
 
 Django Admin продолжает работать через обычную session-auth.
+
+## Регистрация и роли
+
+Роли: `user` (обычный), `premium` (премиум), `admin` (`is_staff`/`is_superuser`).
+Поле `role` приходит в `login`, `register`, `me` и `profile`.
+
+| Endpoint | Доступ | Назначение |
+|---|---|---|
+| `POST /api/register/` | все | `{username, password, email?}` → `201` + `token`, роль всегда `user` |
+| `GET /api/admin/users/` | admin | список пользователей с ролями |
+| `PATCH /api/admin/users/<id>/role/` | admin | `{"role": "user"\|"premium"\|"admin"}` |
+
+Правила: роль `admin` назначает и снимает только суперпользователь; нельзя менять
+свою роль и роль суперпользователя. Премиум можно выдать и в Django Admin
+(`Профили пользователей` → `Премиум пользователь`).
+
+### Загрузка тестов
+
+`POST /api/tests/upload/` (multipart: `title`, `description`, `file`) доступен
+`premium` и `admin`; обычному пользователю — `403`. Автор сохраняется в `Test.created_by`
+и отдается как `author` в `GET /api/tests/`. Тест виден всем пользователям.
+Премиум-пользователь может загрузить не более `PREMIUM_UPLOAD_MAX_QUESTIONS`
+(по умолчанию 300) вопросов за раз, у админа лимита нет.
+
+### Бесплатный лимит
+
+Обычный пользователь (`role=user`) может ответить максимум на `FREE_ANSWER_LIMIT`
+(по умолчанию 5) разных вопросов за все время. Лимит общий для блоков и случайного теста,
+повторный ответ на тот же вопрос его не тратит. Когда лимит исчерпан, `check-answer` и
+`submit` отвечают `402`:
+
+```json
+{"detail": "Бесплатный лимит (5 ответов) исчерпан. Чтобы продолжить, оформите премиум через администратора.",
+ "code": "free_limit_reached", "free_answers_limit": 5, "free_answers_used": 5, "free_answers_left": 0}
+```
+
+Остаток лимита (`free_answers_limit/used/left`) приходит в `me`, `profile`, `check-answer`
+и `submit`; для `premium`/`admin` эти поля `null`. Обычный пользователь может отправить
+`submit` блока только с теми вопросами, на которые ответил (в пределах лимита).
+Премиум выдает админ через `PATCH /api/admin/users/<id>/role/` или Django Admin.
+
+Настройки: `REGISTRATION_ENABLED=False` отключает регистрацию,
+`REGISTER_THROTTLE_RATE` (по умолчанию `10/hour`) ограничивает частоту.
 
 После запуска:
 
@@ -57,25 +107,32 @@ Django Admin продолжает работать через обычную ses
 ```txt
 +++++
 Вопрос 1
+======
 Вариант 1
+======
 Вариант 2
+======
 #Вариант 3
+======
 Вариант 4
 ======
 +++++
 Вопрос 2
+======
 Вариант 1
+======
 #Вариант 2
+======
 Вариант 3
-Вариант 4
 ======
 ```
 
 Правила:
 
-- `++++++` начинает новый вопрос
-- первая строка после `++++++` — текст вопроса
-- строка с `#` — правильный ответ
+- `+++++` (минимум 5 плюсов) начинает новый вопрос
+- вопрос и каждый вариант ответа разделяются строкой `=====` (минимум 5 знаков `=`)
+- первый блок после `+++++` — текст вопроса
+- вариант с `#` в начале — правильный ответ
 - у каждого вопроса должен быть один правильный ответ
 - у каждого вопроса должно быть минимум 2 варианта ответа
 

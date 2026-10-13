@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer
+from .models import Answer, Question, Test, TestBlock, TestResult, UserAnswer, UserProfile
 
 
 class AnswerInline(admin.TabularInline):
@@ -22,7 +22,7 @@ class TestBlockInline(admin.TabularInline):
 
 @admin.register(Test)
 class TestAdmin(admin.ModelAdmin):
-    list_display = ("title", "is_active", "created_at")
+    list_display = ("title", "is_active", "created_by", "created_at")
     list_filter = ("is_active", "created_at")
     search_fields = ("title", "description")
     inlines = [TestBlockInline]
@@ -81,3 +81,11 @@ class TestResultAdmin(admin.ModelAdmin):
 class UserAnswerAdmin(admin.ModelAdmin):
     list_display = ("result", "question", "selected_answer", "is_correct")
     list_filter = ("is_correct", "result__test", "result__block")
+
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ("user", "nickname", "is_premium", "created_at")
+    list_editable = ("is_premium",)
+    list_filter = ("is_premium",)
+    search_fields = ("user__username", "nickname")

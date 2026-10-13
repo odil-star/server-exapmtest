@@ -7,5 +7,6 @@ from .models import UserProfile
 
 @receiver(post_save, sender=User)
 def create_user_profile(sender, instance, created, **kwargs):
-    if created:
+    # raw=True при loaddata: профили приходят из дампа, создавать их не нужно.
+    if created and not kwargs.get("raw", False):
         UserProfile.objects.get_or_create(user=instance)
