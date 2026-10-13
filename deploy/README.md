@@ -1,7 +1,6 @@
 # Деплой на VPS (Ubuntu/Debian, nginx + gunicorn + Postgres)
 
-Файлы рядом: `demotest.service`, `nginx.conf`, `.env.example`. Замени `example.com`,
-пароли и пути на свои.
+Домен уже подставлен (`vps12172.eskiz.uz`, IP `189.74.100.138`). Замени пароли и пути на свои.
 
 ## 1. Пакеты и база
 ```bash
@@ -45,15 +44,19 @@ sudo cp deploy/demotest.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now demotest
 
+# сначала сертификат (домен должен резолвиться в IP сервера, порт 80 открыт)
+sudo systemctl stop nginx
+sudo certbot certonly --standalone -d vps12172.eskiz.uz
+
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/demotest
 sudo ln -s /etc/nginx/sites-available/demotest /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d example.com -d www.example.com
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl start nginx
 ```
 
 ## 5. Проверка
 ```bash
-curl https://example.com/api/health/        # {"status":"ok"}
+curl https://vps12172.eskiz.uz/api/health/        # {"status":"ok"}
 sudo journalctl -u demotest -f              # логи приложения
 ```
 
@@ -77,4 +80,4 @@ sudo -u postgres pg_dump demotest | gzip > /var/backups/demotest-$(date +%F).sql
 - `DEBUG=False`, уникальный `SECRET_KEY`, сильный пароль БД.
 - Порт 5432 наружу не открывать (по умолчанию слушает только localhost).
 - Файрвол: открыты только 22, 80, 443 (`sudo ufw allow OpenSSH && sudo ufw allow 'Nginx Full' && sudo ufw enable`).
-- Фронтенд на `https://odil-star.github.io` должен ходить на `https://example.com/api/`.
+- Фронтенд на `https://odil-star.github.io` должен ходить на `https://vps12172.eskiz.uz/api/`.
